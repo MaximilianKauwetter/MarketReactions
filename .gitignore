@@ -1,4 +1,5 @@
 .venv/*
+.venvdell/*
 .idea/*
 data/*
 .env
