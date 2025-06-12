@@ -1,187 +1,232 @@
 import pandas as pd
-import os
+from datetime import datetime, timedelta
+from data_managemant.FileManager import FileManager
 from data_managemant.LSEGDownloader import LSEGDataDownloader
-from datetime import datetime as dt
-from datetime import timedelta
+from data_managemant.FirmLists import FirmLists
+from Entities.Firm import Firm
+from data_managemant.CountryCodes import COUNTRY
 
 
 class DataLoader:
-    FOLDER_DATA: str = os.path.dirname(os.path.realpath(__file__)) + r"\..\data"
-    FOLDER_DAILY_STOCK: str = os.path.join(FOLDER_DATA, "daily_stock_data")
-    PATH_RAW_FIRM_LISTS: str = os.path.join(FOLDER_DATA, "Firm_lists.xlsx")
-    PATH_EXTENDED_FIRM_LISTS: str = os.path.join(FOLDER_DATA, "Extended_Firm_lists.xlsx")
-    DELISTING_COLS = ["DelistedDate", "ReasonDelisted"]
+    RF_RATES: dict[COUNTRY, str] = {
+        COUNTRY.BELGIUM: "EUROSTR=",
+        COUNTRY.SPAIN: "EUROSTR=",
+        COUNTRY.GREAT_BRITAIN: "SONIAOSR=",
+    }
+    MARKET_RATES: dict[COUNTRY, str] = {
+        COUNTRY.BELGIUM: ".BFXI",
+        COUNTRY.SPAIN: ".IBEXTR",
+        COUNTRY.GREAT_BRITAIN: ".TRIUKX",
+    }
 
     def __init__(self):
         # check folders
-        if not os.path.exists(DataLoader.FOLDER_DATA):
-            os.mkdir(DataLoader.FOLDER_DATA)
-        if not os.path.exists(DataLoader.FOLDER_DAILY_STOCK):
-            os.mkdir(DataLoader.FOLDER_DAILY_STOCK)
+        FileManager.init_folders()
 
         self.lseg_downloader = LSEGDataDownloader()
-        self._extended_firm_lists = None
-
-    def _download_extend_firm_list(self, save_as_file: bool) -> dict[str, pd.DataFrame]:
-        print("Download extended firm list")
-        if not os.path.exists(DataLoader.PATH_RAW_FIRM_LISTS):
-            raise FileNotFoundError(f"File {DataLoader.PATH_RAW_FIRM_LISTS} does not exist! Put the Firm_lists.xlsx file in the data folder!")
-        if os.path.exists(DataLoader.PATH_EXTENDED_FIRM_LISTS):
-            raise FileExistsError(f"File {DataLoader.PATH_EXTENDED_FIRM_LISTS} already exists! Delete it first!")
-        raw_firm_lists = pd.ExcelFile(DataLoader.PATH_RAW_FIRM_LISTS)
-        extended_firm_lists = {}
-        for sheet_name in raw_firm_lists.sheet_names:
-            country_code = sheet_name.removeprefix("Ausgabe_")
-            print(f"Processing extention for {country_code}...")
-            firm_list = raw_firm_lists.parse(sheet_name, dtype=str)
-            firm_list.set_index("Type", drop=False, inplace=True)
-            firm_list = pd.merge(
-                left=firm_list,
-                right=self.lseg_downloader.extended_RIC_from_DSCD(firm_list["Type"].to_list()),
-                left_index=True,
-                right_index=True,
-                how="left",
-            )
-            extended_firm_lists[country_code] = firm_list
-            print(f"Done processing extention for {country_code}!")
-        print("Done processing all firm lists!")
-        if save_as_file:
-            DataLoader._save_extended_firm_list(extended_firm_lists)
-        return extended_firm_lists
+        self.firm_lists = FirmLists(self.lseg_downloader)
+        self._no_esg_data_lists: dict[COUNTRY, list[str]] = {}
+        self._no_fundamentals_lists: dict[COUNTRY, list[str]] = {}
+        self._firms: dict[COUNTRY, dict[str, Firm]] = {}
 
     @staticmethod
-    def _load_extended_firm_list() -> dict[str, pd.DataFrame]:
-        print("Load extended firm list")
-        if not os.path.exists(DataLoader.PATH_EXTENDED_FIRM_LISTS):
-            raise FileNotFoundError(f"File {DataLoader.PATH_EXTENDED_FIRM_LISTS} does not exist!")
-        extended_firm_lists_excel = pd.ExcelFile(DataLoader.PATH_EXTENDED_FIRM_LISTS)
-        extended_firm_lists = {}
-        for country_code in extended_firm_lists_excel.sheet_names:
-            try:
-                extended_firm_lists[country_code] = extended_firm_lists_excel.parse(country_code, dtype=str)
-            except:
-                raise Exception(f"Error while loading {country_code}!")
-        return extended_firm_lists
-
-    @staticmethod
-    def _save_extended_firm_list(extended_firm_list: dict[str, pd.DataFrame]):
-        print("Save extended firm list")
-        with pd.ExcelWriter(DataLoader.PATH_EXTENDED_FIRM_LISTS) as writer:
-            for country_code, firm_list in extended_firm_list.items():
-                print(f"Save {country_code}")
-                firm_list.to_excel(writer, sheet_name=country_code, index=False)
-        print("Save done")
-
-    @staticmethod
-    def delisting_included(extended_firm_list: dict[str, pd.DataFrame]) -> bool:
-        for country_code, firm_list in extended_firm_list.items():
-            for col in DataLoader.DELISTING_COLS:
-                if col not in firm_list.columns:
-                    return False
-        return True
-
-    def _add_delisting(self, extended_firm_list: dict[str, pd.DataFrame], save_as_file=True) -> dict[str, pd.DataFrame]:
-        for country_code, firm_list in extended_firm_list.items():
-            print(f"Processing delisting for {country_code}...")
-            delisting_information = [col for col in DataLoader.DELISTING_COLS if col not in firm_list.columns]
-            if 0 < len(delisting_information):
-                additional_info = self.lseg_downloader.delisting_data(RIC=firm_list["RIC"].dropna(), delisting_data_cols=delisting_information)
-                country_df = pd.merge(left=firm_list, right=additional_info, left_on="RIC", right_index=True, how="left")
-                extended_firm_list[country_code] = country_df
-            print(f"Done processing delisting for {country_code}!")
-        if save_as_file:
-            DataLoader._save_extended_firm_list(extended_firm_list)
-        return extended_firm_list
-
-    @property
-    def extended_firm_list(self) -> dict[str, pd.DataFrame]:
-        if self._extended_firm_lists is None:
-            if os.path.exists(DataLoader.PATH_EXTENDED_FIRM_LISTS):
-                self._extended_firm_lists = DataLoader._load_extended_firm_list()
-            else:
-                self._extended_firm_lists = self._download_extend_firm_list(save_as_file=True)
-            if not DataLoader.delisting_included(self._extended_firm_lists):
-                self._extended_firm_lists = self._add_delisting(self._extended_firm_lists, save_as_file=True)
-        return self._extended_firm_lists
-
-    def get_daily_returns(self, country_code: str, RIC: str, start_date: dt, end_date: dt, start_return_index: float = 100.0) -> pd.DataFrame | None:
-        dir_path = os.path.join(DataLoader.FOLDER_DAILY_STOCK, country_code)
-        file_path = os.path.join(dir_path, f"{RIC}.csv")
-        save = False
-        if os.path.exists(file_path):
-            print(f"LOAD {RIC} from {start_date.strftime("%Y-%m-%d")} till {end_date.strftime("%Y-%m-%d")}")
-            df = pd.read_csv(
-                file_path,
-                sep=";",
-                decimal=",",
-                index_col=None,
-                parse_dates=["date"],
-            )
-            df["total_return"] = pd.to_numeric(df["total_return"], errors="coerce")
-            df["return_index"] = pd.to_numeric(df["return_index"], errors="coerce")
-
-            df.set_index("date", drop=False, inplace=True)
-            earliest_date = df["date"].min()
-            latest_date = df["date"].max()
-            if start_date.date() < earliest_date.date() or latest_date.date() < end_date.date():
-                dfs = []
-                if start_date < earliest_date:
-                    df_before = self.lseg_downloader.get_total_return(
-                        RIC=RIC,
-                        start_date=start_date,
-                        end_date=earliest_date - timedelta(days=1),
-                    )
-                    if df_before is not None:
-                        dfs.append(df_before)
-
-                dfs.append(df)
-                if latest_date < end_date:
-                    df_after = self.lseg_downloader.get_total_return(
-                        RIC=RIC,
-                        start_date=latest_date + timedelta(days=1),
-                        end_date=end_date,
-                    )
-                    if df_after is not None:
-                        dfs.append(df_after)
-                df = pd.concat(dfs, axis="index")
-                save = True
+    def delisting_year_from_ric(ric: str) -> None | tuple[str, int]:
+        if "^" not in ric:
+            return None
+        ric, year = ric.split("^", 1)
+        year = int(year[1:])
+        if 30 < year:
+            year = 1900 + year
         else:
-            os.makedirs(dir_path, exist_ok=True)
+            year = 2000 + year
+        return ric, year
+
+    def get_daily_returns(
+        self,
+        country_code: COUNTRY,
+        RIC: str,
+        start_date: datetime,
+        end_date: datetime,
+        start_return_index: float = 100.0,
+    ) -> pd.DataFrame | None:
+        df, min_date, max_date = FileManager.read_daily_stock_returns(country_code=country_code, RIC=RIC)
+        save = False
+        if df is None or min_date is None or max_date is None:
             df = self.lseg_downloader.get_total_return(
                 RIC=RIC,
                 start_date=start_date,
                 end_date=end_date,
             )
-            if df is None:
+            if df is None or len(df) == 0:
                 return None
+            min_date = df["date"].min()
+            max_date = df["date"].max()
             save = True
-        df["return_index"] = df["total_return"].add(1).cumprod()
-        if save:
-            df.to_csv(file_path, sep=";", decimal=",", index=False, header=True)
-        df = df[df["date"].between(start_date, end_date, inclusive="both")]
-        df["return_index"] = df["return_index"] * start_return_index
+        if start_date.date() < min_date.date() or max_date.date() < end_date.date():
+            dfs = []
+            if start_date.date() < min_date.date():
+                df_before = self.lseg_downloader.get_total_return(
+                    RIC=RIC,
+                    start_date=start_date,
+                    end_date=min_date - timedelta(days=1),
+                )
+                if df_before is not None:
+                    dfs.append(df_before)
+            dfs.append(df)
+            if max_date.date() < end_date.date():
+                df_after = self.lseg_downloader.get_total_return(
+                    RIC=RIC,
+                    start_date=max_date + timedelta(days=1),
+                    end_date=end_date,
+                )
+                if df_after is not None:
+                    dfs.append(df_after)
+            if 1 < len(dfs):
+                df = pd.concat(dfs, axis="index")
+                save = True
         df.set_index("date", drop=False, inplace=True)
+        if save:
+            FileManager.save_daily_stock_returns(country_code=country_code, RIC=RIC, df=df)
+        df = df[df["date"].between(start_date, end_date, inclusive="both")]
+        df["return_cumulative"] = df["total_return"].add(1).cumprod()
+        df["return_index"] = df["return_cumulative"] * start_return_index
         return df
 
-    def get_daily_returns_for_countries(
+    def get_daily_stock_returns(
         self,
-        countries: list[str],
-        start_date: dt,
-        end_date: dt,
+        country_code: COUNTRY,
+        RIC: str,
+        start_date: datetime,
+        end_date: datetime,
         start_return_index: float = 100.0,
-    ) -> dict[str, dict[str, pd.DataFrame]]:
-        countries_dfs: dict[str, dict[str, pd.DataFrame]] = {}
+    ) -> pd.DataFrame | None:
+        return self.get_daily_returns(
+            country_code=country_code,
+            RIC=RIC,
+            start_date=start_date,
+            end_date=end_date,
+            start_return_index=start_return_index,
+        )
+
+    def get_risk_free_rate(
+        self,
+        country_code: COUNTRY,
+        start_date: datetime,
+        end_date: datetime,
+        start_return_index: float = 100.0,
+    ) -> pd.DataFrame | None:
+        df, min_date, max_date = FileManager.read_daily_risk_free_returns(country_code=country_code)
+        save = False
+        if df is None or min_date is None or max_date is None:
+            df = self.lseg_downloader.get_over_night_rates(
+                RIC=DataLoader.RF_RATES[country_code],
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if df is None or len(df) == 0:
+                return None
+            min_date = df["date"].min()
+            max_date = df["date"].max()
+            save = True
+        if start_date.date() < min_date.date() or max_date.date() < end_date.date():
+            dfs = []
+            if start_date.date() < min_date.date():
+                df_before = self.lseg_downloader.get_over_night_rates(
+                    RIC=DataLoader.RF_RATES[country_code],
+                    start_date=start_date,
+                    end_date=min_date - timedelta(days=1),
+                )
+                if df_before is not None:
+                    dfs.append(df_before)
+            dfs.append(df)
+            if max_date.date() < end_date.date():
+                df_after = self.lseg_downloader.get_over_night_rates(
+                    RIC=DataLoader.RF_RATES[country_code],
+                    start_date=max_date + timedelta(days=1),
+                    end_date=end_date,
+                )
+                if df_after is not None:
+                    dfs.append(df_after)
+            if 1 < len(dfs):
+                df = pd.concat(dfs, axis="index")
+                save = True
+        df.set_index("date", drop=False, inplace=True)
+        if save:
+            FileManager.save_daily_risk_free_returns(country_code=country_code, df=df)
+        df = df[df["date"].between(start_date, end_date, inclusive="both")]
+        df["return_cumulative"] = df["total_return"].add(1).cumprod()
+        df["return_index"] = df["return_cumulative"] * start_return_index
+        return df
+
+    def get_market_return(
+        self,
+        country_code: COUNTRY,
+        start_date: datetime,
+        end_date: datetime,
+        start_return_index: float = 100.0,
+    ) -> pd.DataFrame | None:
+        df, min_date, max_date = FileManager.read_daily_market_returns(country_code=country_code)
+        save = False
+        if df is None or min_date is None or max_date is None:
+            df = self.lseg_downloader.get_index_rates(
+                RIC=DataLoader.MARKET_RATES[country_code],
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if df is None or len(df) == 0:
+                return None
+            min_date = df["date"].min()
+            max_date = df["date"].max()
+            save = True
+        if start_date.date() < min_date.date() or max_date.date() < end_date.date():
+            dfs = []
+            if start_date.date() < min_date.date():
+                df_before = self.lseg_downloader.get_index_rates(
+                    RIC=DataLoader.MARKET_RATES[country_code],
+                    start_date=start_date,
+                    end_date=min_date - timedelta(days=1),
+                )
+                if df_before is not None:
+                    dfs.append(df_before)
+            dfs.append(df)
+            if max_date.date() < end_date.date():
+                df_after = self.lseg_downloader.get_index_rates(
+                    RIC=DataLoader.MARKET_RATES[country_code],
+                    start_date=max_date + timedelta(days=1),
+                    end_date=end_date,
+                )
+                if df_after is not None:
+                    dfs.append(df_after)
+            if 1 < len(dfs):
+                df = pd.concat(dfs, axis="index")
+                save = True
+        df.set_index("date", drop=False, inplace=True)
+        if save:
+            FileManager.save_daily_market_returns(country_code=country_code, df=df)
+        df = df[df["date"].between(start_date, end_date, inclusive="both")]
+        df["return_cumulative"] = df["total_return"].add(1).cumprod()
+        df["return_index"] = df["return_cumulative"] * start_return_index
+        return df
+
+    def get_daily_stock_returns_for_countries(
+        self,
+        countries: list[COUNTRY],
+        start_date: datetime,
+        end_date: datetime,
+        start_return_index: float = 100.0,
+        use_dead_list: bool = False,
+    ) -> dict[COUNTRY, dict[str, pd.DataFrame]]:
+        countries_dfs: dict[COUNTRY, dict[str, pd.DataFrame]] = {}
         for country_code in countries:
-            country_df = self.extended_firm_list[country_code]
-            rics = country_df.loc[
-                (~country_df["RIC"].isna())
-                & ((country_df["DelistedDate"].isna()) | (start_date < pd.to_datetime(country_df["DelistedDate"], format="%B %Y"))),
-                "RIC",
-            ]
+            country_firm_rics = self.firm_lists.get_county_firm_rics_without_dead_firms(
+                country=country_code,
+                dead_date=start_date,
+                use_dead_list=use_dead_list,
+            ).to_list()
             country_dfs = {}
-            for i, ric in enumerate(rics):
-                print(f"{i+1:>4}/{len(rics):>4}: {ric:<30} | ", end="")
-                df = self.get_daily_returns(
+            for i, ric in enumerate(country_firm_rics):
+                print(f"{i+1:>4}/{len(country_firm_rics):>4}: {ric:<30} | ", end="")
+                df = self.get_daily_stock_returns(
                     country_code=country_code,
                     RIC=ric,
                     start_date=start_date,
@@ -194,3 +239,207 @@ class DataLoader:
                 country_dfs[ric] = df
             countries_dfs[country_code] = country_dfs
         return countries_dfs
+
+    def get_no_esg_data_list(
+        self,
+        country_code: COUNTRY,
+    ) -> list[str]:
+        if self._no_esg_data_lists.get(country_code, None) is None:
+            self._no_esg_data_lists[country_code] = FileManager.load_no_esg_data_list(country_code)
+        return self._no_esg_data_lists[country_code]
+
+    def add_to_no_esg_data_list(
+        self,
+        country_code: COUNTRY,
+        no_esg_data_firm: str,
+    ):
+        self.get_no_esg_data_list(country_code)
+        self._no_esg_data_lists[country_code].append(no_esg_data_firm)
+        FileManager.save_no_esg_data_list(country_code, self._no_esg_data_lists[country_code])
+
+    def get_esg_data(
+        self,
+        country_code: COUNTRY,
+        RIC: str,
+        start_year: int,
+        end_year: int,
+    ) -> pd.DataFrame | None:
+        if RIC in self.get_no_esg_data_list(country_code=country_code):
+            return None
+        df = FileManager.read_esg_data(country_code=country_code, RIC=RIC)
+        if df is None:
+            df = self.lseg_downloader.get_full_esg_data(RIC=RIC)
+            if df is None:
+                return None
+            if len(df) == 0:
+                self.add_to_no_esg_data_list(country_code=country_code, no_esg_data_firm=RIC)
+                return None
+            FileManager.save_esg_data(country_code=country_code, RIC=RIC, df=df)
+        start_date, end_date = datetime(year=start_year, month=1, day=1), datetime(year=end_year, month=12, day=31)
+        df = df[df["date"].between(start_date, end_date, inclusive="both")]
+        return df
+
+    def get_esg_data_for_countries(
+        self,
+        countries: list[COUNTRY],
+        start_year: int,
+        end_year: int,
+        use_dead_list: bool = False,
+    ) -> dict[COUNTRY, dict[str, pd.DataFrame]]:
+        countries_dfs: dict[COUNTRY, dict[str, pd.DataFrame]] = {}
+        for country_code in countries:
+            country_firm_rics = self.firm_lists.get_county_firm_rics_without_dead_firms(
+                country=country_code,
+                dead_date=datetime(year=start_year, month=1, day=1),
+                use_dead_list=use_dead_list,
+            ).to_list()
+            country_dfs = {}
+            for i, ric in enumerate(country_firm_rics):
+                print(f"{i + 1:>4}/{len(country_firm_rics):>4}: {ric:<30} | ", end="")
+                df = self.get_esg_data(
+                    country_code=country_code,
+                    RIC=ric,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
+                if df is None:
+                    print("No data so continue")
+                    continue
+                country_dfs[ric] = df
+            countries_dfs[country_code] = country_dfs
+        return countries_dfs
+
+    def get_no_fundamentals_list(
+        self,
+        country_code: COUNTRY,
+    ) -> list[str]:
+        if self._no_fundamentals_lists.get(country_code, None) is None:
+            self._no_fundamentals_lists[country_code] = FileManager.load_no_fundamentals_list(country_code)
+        return self._no_fundamentals_lists[country_code]
+
+    def add_to_no_fundamentals_list(
+        self,
+        country_code: COUNTRY,
+        no_fundamentals_firm: str,
+    ):
+        self.get_no_fundamentals_list(country_code)
+        self._no_fundamentals_lists[country_code].append(no_fundamentals_firm)
+        FileManager.save_no_fundamentals_list(country_code, self._no_fundamentals_lists[country_code])
+
+    def get_fundamentals(
+        self,
+        country_code: COUNTRY,
+        RIC: str,
+        start_year: int,
+        end_year: int,
+    ) -> pd.DataFrame | None:
+        if RIC in self.get_no_fundamentals_list(country_code=country_code):
+            return None
+        df = FileManager.read_fundamentals(country_code=country_code, RIC=RIC)
+        if df is None:
+            df = self.lseg_downloader.get_fundamentals(RIC=RIC)
+            if df is None:
+                return None
+            if len(df) == 0:
+                self.add_to_no_fundamentals_list(country_code=country_code, no_fundamentals_firm=RIC)
+                return None
+            FileManager.save_fundamentals(country_code=country_code, RIC=RIC, df=df)
+        start_date, end_date = datetime(year=start_year, month=1, day=1), datetime(year=end_year, month=12, day=31)
+        df = df[df["date"].between(start_date, end_date, inclusive="both")]
+        return df
+
+    def get_fundamentals_for_countries(
+        self,
+        countries: list[COUNTRY],
+        start_year: int,
+        end_year: int,
+        use_dead_list: bool = False,
+    ) -> dict[COUNTRY, dict[str, pd.DataFrame]]:
+        countries_dfs: dict[COUNTRY, dict[str, pd.DataFrame]] = {}
+        for country_code in countries:
+            country_firm_rics = self.firm_lists.get_county_firm_rics_without_dead_firms(
+                country=country_code,
+                dead_date=datetime(year=start_year, month=1, day=1),
+                use_dead_list=use_dead_list,
+            ).to_list()
+            country_dfs = {}
+            for i, ric in enumerate(country_firm_rics):
+                print(f"{i + 1:>4}/{len(country_firm_rics):>4}: {ric:<30} | ", end="")
+                df = self.get_fundamentals(
+                    country_code=country_code,
+                    RIC=ric,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
+                if df is None:
+                    print("No data so continue")
+                    continue
+                country_dfs[ric] = df
+            countries_dfs[country_code] = country_dfs
+        return countries_dfs
+
+    def create_firm(
+        self,
+        country_code: COUNTRY,
+        RIC: str,
+        interval_daily_returns: tuple[datetime, datetime],
+        interval_esg: tuple[int, int],
+    ) -> Firm:
+        meta = self.firm_lists.extended_firm_lists[country_code.value].loc[RIC, :]
+        fundamentals = self.get_fundamentals(
+            country_code=country_code,
+            RIC=RIC,
+            start_year=min(interval_daily_returns).year,
+            end_year=max(interval_daily_returns).year,
+        )
+        daily_returns = self.get_daily_stock_returns(
+            country_code=country_code,
+            RIC=RIC,
+            start_date=min(interval_daily_returns),
+            end_date=max(interval_daily_returns),
+        )
+        esg_data = self.get_esg_data(
+            country_code=country_code,
+            RIC=RIC,
+            start_year=min(interval_esg),
+            end_year=max(interval_esg),
+        )
+        risk_free_rate = self.get_risk_free_rate(
+            country_code=country_code,
+            start_date=min(interval_daily_returns),
+            end_date=max(interval_daily_returns),
+        )
+        market_return = self.get_market_return(
+            country_code=country_code,
+            start_date=min(interval_daily_returns),
+            end_date=max(interval_daily_returns),
+        )
+
+        return Firm(
+            meta=meta,
+            fundamentals=fundamentals,
+            df_daily_returns=daily_returns,
+            df_esg=esg_data,
+            risk_free_rate=risk_free_rate,
+            market_returns=market_return,
+        )
+
+    def get_firm(
+        self,
+        country_code: COUNTRY,
+        RIC: str,
+        interval_daily_returns: tuple[datetime, datetime],
+        interval_esg: tuple[int, int],
+    ):
+        firm = self._firms.get(country_code, {}).get(RIC, None)
+        if firm is None:
+            firm = self.create_firm(
+                country_code=country_code,
+                RIC=RIC,
+                interval_daily_returns=interval_daily_returns,
+                interval_esg=interval_esg,
+            )
+            if self._firms.get(country_code, None) is None:
+                self._firms[country_code] = {}
+            self._firms[country_code][RIC] = firm
+        return firm
