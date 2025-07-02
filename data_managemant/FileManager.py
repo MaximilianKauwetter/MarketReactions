@@ -1,6 +1,8 @@
 import os
-import pandas as pd
 from datetime import datetime
+
+import pandas as pd
+import plotly.graph_objects as go
 
 from data_managemant.CountryCodes import COUNTRY
 
@@ -12,6 +14,7 @@ class FileManager:
     FOLDER_DAILY_MARKET_RETURNS: str = os.path.join(FOLDER_DATA, "daily_market_returns")
     FOLDER_ESG_DATA: str = os.path.join(FOLDER_DATA, "esg_data")
     FOLDER_FUNDAMENTALS: str = os.path.join(FOLDER_DATA, "fundamentals")
+    OUTPUT_RESULT_FOLDER: str = os.path.join(FOLDER_DATA, "results")
     PATH_RAW_FIRM_LISTS: str = os.path.join(FOLDER_DATA, "Firm_lists.xlsx")
     PATH_EXTENDED_FIRM_LISTS: str = os.path.join(FOLDER_DATA, "Extended_Firm_lists.xlsx")
 
@@ -58,8 +61,9 @@ class FileManager:
         print("Save done")
 
     @staticmethod
-    def _read_daily_returns(file_path: str) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
+    def _read_daily_returns(file_path: str, print_stuff: bool = True) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
         if not os.path.exists(file_path):
+            print()
             return None, None, None
         df = pd.read_csv(
             file_path,
@@ -74,28 +78,35 @@ class FileManager:
         min_date = df["date"].min()
         max_date = df["date"].max()
         if pd.isna(min_date) or pd.isna(max_date):
-            print("empty_date")
+            if print_stuff:
+                print("empty_date")
             return None, None, None
-        print(f"from {min_date.strftime('%Y-%m-%d')} till {max_date.strftime('%Y-%m-%d')}")
+        if print_stuff:
+            print(f"from {min_date.strftime('%Y-%m-%d')} till {max_date.strftime('%Y-%m-%d')}")
         return df, min_date, max_date
 
     @staticmethod
-    def read_daily_stock_returns(country_code: COUNTRY, RIC: str) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
+    def read_daily_stock_returns(
+        country_code: COUNTRY, RIC: str, print_stuff: bool = True
+    ) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
         file_path = os.path.join(FileManager.FOLDER_DAILY_STOCK, country_code.value, f"{RIC}.csv")
-        print(f"Read {country_code.value+":":<4} {RIC:<20}", end="")
-        return FileManager._read_daily_returns(file_path)
+        if print_stuff:
+            print(f"{country_code.value+":":<4} {RIC:<20} Read Daily Stock Return         ", end="")
+        return FileManager._read_daily_returns(file_path, print_stuff=print_stuff)
 
     @staticmethod
-    def read_daily_risk_free_returns(country_code: COUNTRY) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
+    def read_daily_risk_free_returns(country_code: COUNTRY, print_stuff: bool = True) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
         file_path = os.path.join(FileManager.FOLDER_DAILY_RISK_FREE_RETURNS, f"{country_code.value}.csv")
-        print(f"Read Risk Free Rates: {country_code.value + ":":<4}", end="")
-        return FileManager._read_daily_returns(file_path)
+        if print_stuff:
+            print(f"{country_code.value+":":<4}                      Read Risk Free Rates            ", end="")
+        return FileManager._read_daily_returns(file_path, print_stuff=print_stuff)
 
     @staticmethod
-    def read_daily_market_returns(country_code: COUNTRY) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
+    def read_daily_market_returns(country_code: COUNTRY, print_stuff: bool = True) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
         file_path = os.path.join(FileManager.FOLDER_DAILY_MARKET_RETURNS, f"{country_code.value}.csv")
-        print(f"Read Market Returns: {country_code.value+":":<4}", end="")
-        return FileManager._read_daily_returns(file_path)
+        if print_stuff:
+            print(f"{country_code.value+":":<4}                      Read Market Returns             ", end="")
+        return FileManager._read_daily_returns(file_path, print_stuff=print_stuff)
 
     @staticmethod
     def save_daily_returns(folder_path: str, file_name: str, df: pd.DataFrame):
@@ -146,11 +157,13 @@ class FileManager:
     def read_esg_data(
         country_code: COUNTRY,
         RIC: str,
+        print_stuff: bool = True,
     ) -> pd.DataFrame | None:
         file_path = os.path.join(FileManager.FOLDER_ESG_DATA, country_code.value, f"{RIC}.csv")
         if not os.path.exists(file_path):
             return None
-        print(f"Read {country_code.value + ":":<4} {RIC:<20}", end="")
+        if print_stuff:
+            print(f"{country_code.value+":":<4} {RIC:<20} Read ESG                        ", end="")
         df = pd.read_csv(
             file_path,
             sep=";",
@@ -159,9 +172,11 @@ class FileManager:
             parse_dates=["date"],
         )
         if len(df) == 0:
-            print("empty_date")
+            if print_stuff:
+                print("empty_date")
             return None
-        print()
+        if print_stuff:
+            print()
         return df
 
     @staticmethod
@@ -186,7 +201,7 @@ class FileManager:
 
     @staticmethod
     def save_no_fundamentals_list(country_code: COUNTRY, no_fundamentals_list: list[str]):
-        dir_folder = os.path.join(FileManager.FOLDER_ESG_DATA, country_code.value)
+        dir_folder = os.path.join(FileManager.FOLDER_FUNDAMENTALS, country_code.value)
         if not os.path.exists(dir_folder):
             os.makedirs(dir_folder, exist_ok=True)
         filepath = os.path.join(dir_folder, "_no_fundamentals_list.txt")
@@ -196,11 +211,13 @@ class FileManager:
     def read_fundamentals(
         country_code: COUNTRY,
         RIC: str,
+        print_stuff: bool = True,
     ):
         file_path = os.path.join(FileManager.FOLDER_FUNDAMENTALS, country_code.value, f"{RIC}.csv")
         if not os.path.exists(file_path):
             return None
-        print(f"Read {country_code.value + ":":<4} {RIC:<20}", end="")
+        if print_stuff:
+            print(f"{country_code.value+":":<4} {RIC:<20} Read Fundamentals               ", end="")
         df = pd.read_csv(
             file_path,
             sep=";",
@@ -209,9 +226,11 @@ class FileManager:
             parse_dates=["date"],
         )
         if len(df) == 0:
-            print("empty_date")
+            if print_stuff:
+                print("empty_date")
             return None
-        print()
+        if print_stuff:
+            print()
         return df
 
     @staticmethod
@@ -225,3 +244,48 @@ class FileManager:
             os.makedirs(dir_folder, exist_ok=True)
         file_path = os.path.join(dir_folder, f"{RIC}.csv")
         df.to_csv(file_path, sep=";", decimal=",", index=False, header=True)
+
+    @staticmethod
+    def write_excel_results(excel_name: str, dfs: dict[..., pd.DataFrame]):
+        excel_name = excel_name if "." in excel_name else f"{excel_name}.xlsx"
+        output_excel_file_path = os.path.join(FileManager.OUTPUT_RESULT_FOLDER, excel_name)
+        os.makedirs(os.path.dirname(output_excel_file_path), exist_ok=True)
+        with pd.ExcelWriter(output_excel_file_path, engine="openpyxl") as writer:
+            for sheet_name, df in dfs.items():
+                if 31 < len(sheet_name):
+                    raise ValueError(f'sheet_name "{sheet_name}" must be less than 32 characters, but is {len(sheet_name)}')
+                df.to_excel(writer, sheet_name=sheet_name, index=True)
+
+    @staticmethod
+    def save_fig(fig: go.Figure, name: str, resolution: tuple[int, int] = (3840, 2160)):
+        if "." not in name:
+            name = f"{name}.png"
+        output_fig_file_path = os.path.join(FileManager.OUTPUT_RESULT_FOLDER, name)
+        os.makedirs(os.path.dirname(output_fig_file_path), exist_ok=True)
+        for i in range(3):
+            try:
+                print(f"\tTry Kaleido {i} ", end="")
+                fig.write_image(
+                    output_fig_file_path,
+                    width=resolution[0],
+                    height=resolution[1],
+                    format="png",
+                    engine="kaleido",
+                )
+                print("Success")
+                break
+            except:
+                print(f"Fail")
+                try:
+                    print(f"\tTry Orca {i} ", end="")
+                    fig.write_image(
+                        output_fig_file_path,
+                        width=resolution[0],
+                        height=resolution[1],
+                        format="png",
+                        engine="orca",
+                    )
+                    print("Success")
+                    break
+                except:
+                    print(f"Fail")

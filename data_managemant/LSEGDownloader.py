@@ -1,14 +1,14 @@
 import math
+import os
 import time
+from datetime import datetime, timedelta
+from enum import Enum
 
 import lseg.data as ld
-from dotenv import load_dotenv
-import pandas as pd
-import os
-from datetime import datetime, timedelta
-from lseg.data.content import search
-from enum import Enum
 import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from lseg.data.content import search
 
 
 class LSEGInterval(Enum):
@@ -23,7 +23,8 @@ class LSEGInterval(Enum):
 
 
 class LSEGDataDownloader:
-    def __init__(self):
+    def __init__(self, print_stuff: bool = True):
+        self.print_stuff = print_stuff
         load_dotenv()
         api_key = os.getenv("api_key")
         ldp_login = os.getenv("ldp_login")
@@ -90,7 +91,8 @@ class LSEGDataDownloader:
         chunks = np.array_split(terms, math.ceil(len(terms) / chunk_size))
         dfs = []
         for i, chunk in enumerate(chunks):
-            print(f"\tLoad chunk {i + 1}/{len(chunks)} ", end="")
+            if self.print_stuff:
+                print(f"\tLoad chunk {i + 1}/{len(chunks)} ", end="")
             dfs.append(
                 search.lookup.Definition(
                     view=search.Views.SEARCH_ALL,
@@ -101,7 +103,8 @@ class LSEGDataDownloader:
                 .get_data()
                 .data.df
             )
-            print("Done")
+            if self.print_stuff:
+                print("Done")
         return pd.concat(dfs, axis="index")
 
     def extended_RIC_from_DSCD(self, DSCD: str | list[str] | pd.Series, chunk_size: int = 100) -> pd.DataFrame:
@@ -185,13 +188,16 @@ class LSEGDataDownloader:
         fields: list[str],
         func_name: str = "",
     ) -> None | pd.DataFrame:
+
         if isinstance(RIC, list):
-            print(f"Download {func_name} for {RIC} ")
+            ric_str = ",".join(RIC)
         elif isinstance(RIC, str):
-            print(f"Download {func_name} for {RIC:<20}")
+            ric_str = RIC
             RIC = [RIC]
         else:
             raise AttributeError()
+        if self.print_stuff:
+            print(f"     {ric_str:<20} Download {func_name}")
         self.open()
         for i in range(5):
             try:
@@ -199,11 +205,15 @@ class LSEGDataDownloader:
                     universe=RIC,
                     fields=fields,
                 )
+                if df is None:
+                    return pd.DataFrame()
                 return df
             except Exception as e:
-                print(f"Error while downloading {RIC} - try {i + 1}/5: {e}")
+                if self.print_stuff:
+                    print(f"     {ric_str:<20} Error while downloading {func_name} - try {i + 1}/5:")
                 time.sleep(0.5)
-        print("No useful download")
+        if self.print_stuff:
+            print(f"     {ric_str:<20} No useful {func_name} download")
         return None
 
     def get_history(
@@ -234,12 +244,14 @@ class LSEGDataDownloader:
             raise AttributeError()
 
         if isinstance(RIC, list):
-            print(f"Download {func_name} for {RIC} from {start_date_str} till {end_date_str}")
+            ric_str = f'[{",".join(RIC)}]'
         elif isinstance(RIC, str):
-            print(f"Download {func_name} for {RIC:<20} from {start_date_str} till {end_date_str}")
+            ric_str = RIC
             RIC = [RIC]
         else:
             raise AttributeError()
+        if self.print_stuff:
+            print(f"     {ric_str:<20} Download {func_name} from {start_date_str} till {end_date_str}")
         self.open()
         for i in range(5):
             try:
@@ -250,11 +262,15 @@ class LSEGDataDownloader:
                     start=start_date,
                     end=end_date,
                 )
+                if df is None:
+                    return pd.DataFrame()
                 return df
             except Exception as e:
-                print(f"Error while downloading {RIC} - try {i + 1}/5: {e}")
+                if self.print_stuff:
+                    print(f"     {ric_str:<20} Error while downloading {func_name} - try {i + 1}/5:")
                 time.sleep(0.5)
-        print("No useful download")
+        if self.print_stuff:
+            print(f"     {ric_str:<20} No useful {func_name} download")
         return None
 
     def get_total_return(
@@ -270,12 +286,11 @@ class LSEGDataDownloader:
             interval=interval,
             start_date=start_date,
             end_date=end_date,
-            func_name="Total Return",
+            func_name="Total Return          ",
         )
         if df is None:
             return None
 
-        print(df)
         df = (
             df.reindex(pd.date_range(start=start_date, end=end_date, freq="D"), fill_value=0)
             .reset_index(drop=False)
@@ -298,7 +313,7 @@ class LSEGDataDownloader:
             start_date=start_date,
             end_date=end_date,
             interval=interval,
-            func_name="Over Night Rates",
+            func_name="Over Night Rates      ",
         )
         if df is None:
             return None
@@ -340,7 +355,7 @@ class LSEGDataDownloader:
             interval=interval,
             start_date=start_date,
             end_date=end_date,
-            func_name="Index Rates",
+            func_name="Index Rates           ",
         )
         if df is None:
             return None
@@ -399,12 +414,15 @@ class LSEGDataDownloader:
             interval=LSEGInterval.YEARLY,
             start_date="2000",
             end_date="2030",
+            func_name="Fundamentals          ",
         )
+        if df is None:
+            return None
 
         df = (
             df.astype("float")
             .ffill()
-            .drop_duplicates(keep="last")
+            .loc[~df.index.duplicated(keep="last"), :]
             .reindex(pd.date_range(start=datetime(2000, 12, 31), end=datetime(2030, 12, 31), freq="YE"))
             .dropna(axis="rows", how="all")
             .reset_index(drop=False)
@@ -449,8 +467,10 @@ class LSEGDataDownloader:
             interval=LSEGInterval.YEARLY,
             start_date="2000",
             end_date="2030",
-            func_name="ESG DATA",
+            func_name="ESG DATA              ",
         )
+        if df is None:
+            return None
 
         df.dropna(axis="index", how="all", inplace=True)
         df = df.reset_index(drop=False)
@@ -473,6 +493,8 @@ class LSEGDataDownloader:
             start_date=start_date,
             end_date=end_date,
             interval=interval,
-            func_name="Yield Curve",
+            func_name="Yield Curve           ",
         )
+        if curves is None:
+            return None
         return curves.transpose()

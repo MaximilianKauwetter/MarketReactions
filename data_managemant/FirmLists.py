@@ -29,6 +29,7 @@ class FirmLists:
             self._extended_firm_lists = extended_firm_lists
             if not FirmLists.delisting_included(self._extended_firm_lists):
                 self._extended_firm_lists = self._add_delisting(self._extended_firm_lists, save_as_file=True)
+
         return self._extended_firm_lists
 
     @property
